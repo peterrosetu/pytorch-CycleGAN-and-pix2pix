@@ -1,5 +1,5 @@
 ## Frequently Asked Questions
-Before you post a new question, please first look at the following Q & A and existing GitHub issues. You may also want to read [Training/Test tips](docs/tips.md) for more suggestions.
+Before you post a new question, please first look at the following Q & A and existing GitHub issues. You may also want to read [Training/Test tips](tips.md) for more suggestions.
 
 #### Connection Error:HTTPConnectionPool ([#230](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/230), [#24](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/24), [#38](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/38))
 Similar error messages include “Failed to establish a new connection/Connection refused”.
@@ -22,7 +22,7 @@ torch.cuda.init()
 print(torch.randn(1, device='cuda'))
 ```
 
-If you met an error, it is likely that your PyTorch build does not work with CUDA, e.g., it is installl from the official MacOS binary, or you have a GPU that is too old and not supported anymore. You may run the the code with CPU using `--gpu_ids -1`.
+If you met an error, it is likely that your PyTorch build does not work with CUDA, e.g., it is installed from the official MacOS binary, or you have a GPU that is too old and not supported anymore. You may run the the code with CPU using `--gpu_ids -1`.
 
 #### TypeError: Object of type 'Tensor' is not JSON serializable ([#258](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/258))
 Similar errors: AttributeError: module 'torch' has no attribute 'device' ([#314](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/314))
@@ -72,7 +72,7 @@ CycleGAN is more memory-intensive than pix2pix as it requires two generators and
 #### RuntimeError: Error(s) in loading state_dict ([#812](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/812), [#671](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/671),[#461](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/461), [#296](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/296))
 If you get the above errors when loading the generator during test time, you probably have used different network configurations for training and test. There are a few things to check: (1) the network architecture `--netG`: you will get an error if you use `--netG unet256` during training, and use `--netG resnet_6blocks` during test. Make sure that the flag is the same. (2) the normalization parameters `--norm`: we use different default `--norm` parameters for `--model cycle_gan`, `--model pix2pix`, and `--model test`. They might be different from the one you used in your training time. Make sure that you add the `--norm` flag in your test code.  (3) If you use dropout during training time, make sure that you use the same Dropout setting in your test. Check the flag `--no_dropout`.
 
-Note that we use different default generators, normalization, and dropout options for different models. The model file can overwrite the default arguments and add new arguments. For example, this [line](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/models/pix2pix_model.py#L32) adds and changes default arguments for pix2pix. For CycleGAN, the default is `--netG resnet_9blocks --no_dropout --norm instance --dataset_mode unaligned`. For pix2pix, the default is `--netG unet_256 --norm batch --dataset_mode aligned`. For model testing with single direction (`--model test`), the default is `--netG resnet_9blocks --norm instance --dataset_mode single`. To make sure that your training and test follow the same setting,  you are encouraged to plicitly specify the `--netG`, `--norm`, `--dataset_mode`, and `--no_dropout` (or not) in your script. 
+Note that we use different default generators, normalization, and dropout options for different models. The model file can overwrite the default arguments and add new arguments. For example, this [line](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/models/pix2pix_model.py#L32) adds and changes default arguments for pix2pix. For CycleGAN, the default is `--netG resnet_9blocks --no_dropout --norm instance --dataset_mode unaligned`. For pix2pix, the default is `--netG unet_256 --norm batch --dataset_mode aligned`. For model testing with single direction (`--model test`), the default is `--netG resnet_9blocks --norm instance --dataset_mode single`. To make sure that your training and test follow the same setting,  you are encouraged to plicitly specify the `--netG`, `--norm`, `--dataset_mode`, and `--no_dropout` (or not) in your script.
 
 #### NotSupportedError ([#829](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/829))
 The error message states that `slicing multiple dimensions at the same time isn't supported yet proposals (Tensor): boxes to be encoded`. It is not related to our repo. It is often caused by incompatibility between the `torhvision` version and `pytorch` version. You need to re-intall or upgrade your `torchvision` to be compatible with the `pytorch` version.
@@ -94,6 +94,17 @@ The model was trained on 256x256 images that are resized/upsampled to 1024x2048,
 #### How do I get the `ground-truth` numbers on the labels2photo Cityscapes evaluation? ([#150](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/150))
 You need to resize the original Cityscapes images to 256x256 before running the evaluation code.
 
+#### What is a good evaluation metric for CycleGAN? ([#730](https://github.com/pulls), [#716](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/716), [#166](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/166))
+The evaluation metric highly depends on your specific task and dataset. There is no single metric that works for all the datasets and tasks.
+
+There are a few popular choices: (1) we often evaluate CycleGAN on paired datasets (e.g., Cityscapes dataset and the meanIOU metric used in the CycleGAN paper), in which the model was trained without pairs. (2) Many researchers have adopted standard GAN metrics such as FID. Note that FID only evaluates the output images, while it ignores the correspondence between output and input. (3) A user study regarding photorealism might be helpful. Please check out the details of a user study in the CycleGAN paper (Section 5.1.1).
+
+In summary, how to automatically evaluate the results is an open research problem for GANs research. But for many creative applications, the results are subjective and hard to quantify without humans in the loop.
+
+
+#### What dose the CycleGAN loss look like if training goes well? ([#1096](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/1096), [#1086](ttps://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/1086), [#288](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/288), [#30](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/30))
+Typically, the cycle-consistency loss and identity loss decrease during training, while GAN losses oscillate. To evaluate the quality of your results, you need to adopt additional evaluation metrics to your training and test images. See the Q & A above.
+
 
 #### Using resize-conv to reduce checkerboard artifacts ([#190](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/190), [#64](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/issues/64))
 This Distill [blog](https://distill.pub/2016/deconv-checkerboard/) discussed one of the potential causes of the checkerboard artifacts. You can fix that issue by switching from "deconvolution" to nearest-neighbor upsampling, followed by regular convolution. Here is one implementation provided by [@SsnL](https://github.com/SsnL). You can replace the ConvTranspose2d with the following layers.
@@ -114,3 +125,24 @@ You can find more training details and hyperparameter settings in the appendix o
 
 #### Results with [Cycada](https://arxiv.org/pdf/1711.03213.pdf)
 We generated the [result of translating GTA images to Cityscapes-style images](https://junyanz.github.io/CycleGAN/) using our Torch repo. Our PyTorch and Torch implementation seemed to produce a little bit different results, although we have not measured the FCN score using the PyTorch-trained model. To reproduce the result of Cycada, please use the Torch repo for now.
+
+#### Loading and using the saved model in your code
+You can easily consume the model in your code using the below code snippet:
+
+```python
+import torch
+from models.networks import define_G
+from collections import OrderedDict
+
+model_dict = torch.load("checkpoints/stars_pix2pix/latest_net_G.pth")
+new_dict = OrderedDict()
+for k, v in model_dict.items():
+    # load_state_dict expects keys with prefix 'module.'
+    new_dict["module." + k] = v
+
+# make sure you pass the correct parameters to the define_G method
+generator_model = define_G(input_nc=1,output_nc=1,ngf=64,netG="resnet_9blocks",
+                            norm="batch",use_dropout=True,init_gain=0.02,gpu_ids=[0])
+generator_model.load_state_dict(new_dict)
+```
+If everything goes well you should see a '\<All keys matched successfully\>' message.
