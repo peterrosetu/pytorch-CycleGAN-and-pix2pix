@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.distributed as dist
 from pathlib import Path
 from collections import OrderedDict
 from abc import ABC, abstractmethod
@@ -31,13 +32,11 @@ class BaseModel(ABC):
             -- self.optimizers (optimizer list):    define and initialize optimizers. You can define one optimizer for each network. If two networks are updated at the same time, you can use itertools.chain to group them. See cycle_gan_model.py for an example.
         """
         self.opt = opt
-        self.gpu_ids = opt.gpu_ids
         self.isTrain = opt.isTrain
-        self.device = torch.device("cuda:{}".format(self.gpu_ids[0])) if self.gpu_ids else torch.device("cpu")  # get device name: CPU or GPU
         self.save_dir = Path(opt.checkpoints_dir) / opt.name  # save all the checkpoints to save_dir
-        if (
-            opt.preprocess != "scale_width"
-        ):  # with [scale_width], input images might have different sizes, which hurts the performance of cudnn.benchmark.
+        self.device = opt.device
+        # with [scale_width], input images might have different sizes, which hurts the performance of cudnn.benchmark.
+        if opt.preprocess != "scale_width":
             torch.backends.cudnn.benchmark = True
         self.loss_names = []
         self.model_names = []
@@ -84,16 +83,51 @@ class BaseModel(ABC):
         Parameters:
             opt (Option class) -- stores all the experiment flags; needs to be a subclass of BaseOptions
         """
-        if self.isTrain:
-            self.schedulers = [networks.get_scheduler(optimizer, opt) for optimizer in self.optimizers]
-        if not self.isTrain or opt.continue_train:
-            load_suffix = "iter_%d" % opt.load_iter if opt.load_iter > 0 else opt.epoch
-            self.load_networks(load_suffix)
+        # Initialize all networks and load if needed
+        for name in self.model_names:
+            if isinstance(name, str):
+                net = getattr(self, "net" + name)
+                net = networks.init_net(net, opt.init_type, opt.init_gain)
+
+                # Load networks if needed
+                if not self.isTrain or opt.continue_train:
+                    load_suffix = f"iter_{opt.load_iter}" if opt.load_iter > 0 else opt.epoch
+                    load_filename = f"{load_suffix}_net_{name}.pth"
+                    load_path = self.save_dir / load_filename
+
+                    if isinstance(net, torch.nn.parallel.DistributedDataParallel):
+                        net = net.module
+                    print(f"loading the model from {load_path}")
+
+                    state_dict = torch.load(load_path, map_location=str(self.device), weights_only=True)
+
+                    if hasattr(state_dict, "_metadata"):
+                        del state_dict._metadata
+
+                    # patch InstanceNorm checkpoints
+                    for key in list(state_dict.keys()):
+                        self.__patch_instance_norm_state_dict(state_dict, net, key.split("."))
+                    net.load_state_dict(state_dict)
+
+                # Move network to device
+                net.to(self.device)
+
+                # Wrap networks with DDP after loading
+                if dist.is_initialized():
+                    # Check if using syncbatch normalization for DDP
+                    if self.opt.norm == "syncbatch":
+                        raise ValueError(f"For distributed training, opt.norm must be 'syncbatch' or 'inst', but got '{self.opt.norm}'. " "Please set --norm syncbatch for multi-GPU training.")
+
+                    net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[self.device.index])
+                    # Sync all processes after DDP wrapping
+                    dist.barrier()
+
+                setattr(self, "net" + name, net)
+
         self.print_networks(opt.verbose)
 
-        # Apply torch.compile if available (PyTorch 2.0+)
-        if hasattr(torch, "compile"):
-            self.compile_networks()
+        if self.isTrain:
+            self.schedulers = [networks.get_scheduler(optimizer, opt) for optimizer in self.optimizers]
 
     def eval(self):
         """Make models eval mode during test time"""
@@ -130,7 +164,7 @@ class BaseModel(ABC):
                 scheduler.step()
 
         lr = self.optimizers[0].param_groups[0]["lr"]
-        print("learning rate %.7f -> %.7f" % (old_lr, lr))
+        print(f"learning rate {old_lr:.7f} -> {lr:.7f}")
 
     def get_current_visuals(self):
         """Return visualization images. train.py will display these images with visdom, and save the images to a HTML"""
@@ -149,22 +183,28 @@ class BaseModel(ABC):
         return errors_ret
 
     def save_networks(self, epoch):
-        """Save all the networks to the disk.
+        """Save all the networks to the disk, unwrapping them first."""
 
-        Parameters:
-            epoch (int) -- current epoch; used in the file name '%s_net_%s.pth' % (epoch, name)
-        """
-        for name in self.model_names:
-            if isinstance(name, str):
-                save_filename = f"{epoch}_net_{name}.pth"
-                save_path = self.save_dir / save_filename
-                net = getattr(self, "net" + name)
+        # Only allow the main process (rank 0) to save the checkpoint
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            for name in self.model_names:
+                if isinstance(name, str):
+                    save_filename = f"{epoch}_net_{name}.pth"
+                    save_path = self.save_dir / save_filename
+                    net = getattr(self, "net" + name)
 
-                if len(self.gpu_ids) > 0 and torch.cuda.is_available():
-                    torch.save(net.module.cpu().state_dict(), save_path)
-                    net.cuda(self.gpu_ids[0])
-                else:
-                    torch.save(net.cpu().state_dict(), save_path)
+                    # 1. First, unwrap from DDP if it exists
+                    if hasattr(net, "module"):
+                        model_to_save = net.module
+                    else:
+                        model_to_save = net
+
+                    # 2. Second, unwrap from torch.compile if it exists
+                    if hasattr(model_to_save, "_orig_mod"):
+                        model_to_save = model_to_save._orig_mod
+
+                    # 3. Save the final, clean state_dict
+                    torch.save(model_to_save.state_dict(), save_path)
 
     def __patch_instance_norm_state_dict(self, state_dict, module, keys, i=0):
         """Fix InstanceNorm checkpoints incompatibility (prior to 0.4)"""
@@ -179,44 +219,31 @@ class BaseModel(ABC):
             self.__patch_instance_norm_state_dict(state_dict, getattr(module, key), keys, i + 1)
 
     def load_networks(self, epoch):
-        """Load all the networks from the disk.
+        """Load all networks from the disk for DDP."""
 
-        Parameters:
-            epoch (int) -- current epoch; used in the file name '%s_net_%s.pth' % (epoch, name)
-        """
         for name in self.model_names:
             if isinstance(name, str):
                 load_filename = f"{epoch}_net_{name}.pth"
                 load_path = self.save_dir / load_filename
                 net = getattr(self, "net" + name)
-                if isinstance(net, torch.nn.DataParallel):
+
+                if isinstance(net, torch.nn.parallel.DistributedDataParallel):
                     net = net.module
                 print(f"loading the model from {load_path}")
-                # if you are using PyTorch newer than 0.4 (e.g., built from
-                # GitHub source), you can remove str() on self.device
+
                 state_dict = torch.load(load_path, map_location=str(self.device), weights_only=True)
+
                 if hasattr(state_dict, "_metadata"):
                     del state_dict._metadata
 
-                # patch InstanceNorm checkpoints prior to 0.4
-                for key in list(state_dict.keys()):  # need to copy keys here because we mutate in loop
+                # patch InstanceNorm checkpoints
+                for key in list(state_dict.keys()):
                     self.__patch_instance_norm_state_dict(state_dict, net, key.split("."))
                 net.load_state_dict(state_dict)
 
-    def compile_networks(self, **compile_kwargs):
-        """Apply torch.compile to all networks for optimization.
-
-        Parameters:
-            **compile_kwargs -- keyword arguments to pass to torch.compile
-                              (e.g., mode='reduce-overhead', backend='inductor')
-        """
-        for name in self.model_names:
-            if isinstance(name, str):
-                net = getattr(self, "net" + name)
-                compiled_net = torch.compile(net, **compile_kwargs)
-                setattr(self, "net" + name, compiled_net)
-                print(f"[Network {name}] compiled with torch.compile")
-                setattr(self, "net" + name, compiled_net)
+        # Add a barrier to sync all processes before continuing
+        if dist.is_initialized():
+            dist.barrier()
 
     def print_networks(self, verbose):
         """Print the total number of parameters in the network and (if verbose) network architecture
@@ -233,7 +260,7 @@ class BaseModel(ABC):
                     num_params += param.numel()
                 if verbose:
                     print(net)
-                print("[Network %s] Total number of parameters : %.3f M" % (name, num_params / 1e6))
+                print(f"[Network {name}] Total number of parameters : {num_params / 1e6:.3f} M")
         print("-----------------------------------------------")
 
     def set_requires_grad(self, nets, requires_grad=False):
@@ -248,3 +275,32 @@ class BaseModel(ABC):
             if net is not None:
                 for param in net.parameters():
                     param.requires_grad = requires_grad
+
+    def init_networks(self, init_type="normal", init_gain=0.02):
+        """Initialize all networks: 1. move to device; 2. initialize weights
+
+        Parameters:
+            init_type (str) -- initialization method: normal | xavier | kaiming | orthogonal
+            init_gain (float) -- scaling factor for normal, xavier and orthogonal
+        """
+        import os
+
+        for name in self.model_names:
+            if isinstance(name, str):
+                net = getattr(self, "net" + name)
+
+                # Move to device
+                if torch.cuda.is_available():
+                    if "LOCAL_RANK" in os.environ:
+                        local_rank = int(os.environ["LOCAL_RANK"])
+                        net.to(local_rank)
+                        print(f"Initialized network {name} with device cuda:{local_rank}")
+                    else:
+                        net.to(0)
+                        print(f"Initialized network {name} with device cuda:0")
+                else:
+                    net.to("cpu")
+                    print(f"Initialized network {name} with device cpu")
+
+                # Initialize weights using networks function
+                networks.init_weights(net, init_type, init_gain)

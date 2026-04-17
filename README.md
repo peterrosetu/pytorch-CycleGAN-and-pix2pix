@@ -4,7 +4,7 @@
 
 # CycleGAN and pix2pix in PyTorch
 
-**Udpate in 2025**: we recently updated the code to support Python 3.11 and PyTorch 2.4. 
+**Udpate in 2025**: we recently updated the code to support Python 3.11 and PyTorch 2.4. It also supports DDP for single-machine multiple-GPU training. (Please use `torchrun --nproc_per_node=4 train.py ...`)
 
 **New**: Please check out [img2img-turbo](https://github.com/GaParmar/img2img-turbo) repo that includes both pix2pix-turbo and CycleGAN-Turbo. Our new one-step image-to-image translation methods can support both paired and unpaired training and produce better results by leveraging the pre-trained StableDiffusion-Turbo model. The inference time for 512x512 image is 0.29 sec on A6000 and 0.11 sec on A100.
 
@@ -232,6 +232,10 @@ python test.py --dataroot ./datasets/facades/ --direction BtoA --model pix2pix -
 
 - See a list of currently available models at `./scripts/download_pix2pix_model.sh`
 
+### Multi-GPU training
+
+To train a model on multiple GPUs, please use `torchrun --nproc_per_node=4 train.py ...` instead of `python train.py ...`. We also need to use synchronized batchnorm by setting `--norm sync_batch` (or `--norm sync_instance` for instance normgalization). The `--norm batch` is not compatible with DDP.
+
 ## [Docker](docs/docker.md)
 
 We provide the pre-built Docker image and Dockerfile that can run this code repo. See [docker](docs/docker.md).
@@ -259,7 +263,7 @@ To help users better understand and use our code, we briefly overview the functi
 ## Pull Request
 
 You are always welcome to contribute to this repository by sending a [pull request](https://help.github.com/articles/about-pull-requests/).
-Please run `flake8 --ignore E501 .` and `python ./scripts/test_before_push.py` before you commit the code. Please also update the code structure [overview](docs/overview.md) accordingly if you add or remove files.
+Please run `flake8 --ignore E501 .` and `pytest scripts/test_before_push.py -v` before you commit the code. Please also update the code structure [overview](docs/overview.md) accordingly if you add or remove files.
 
 ## Citation
 
@@ -288,11 +292,12 @@ If you use this code for your research, please cite our papers.
 
 ## Related Projects
 
-**[contrastive-unpaired-translation](https://github.com/taesungp/contrastive-unpaired-translation) (CUT)**<br>
-**[CycleGAN-Torch](https://github.com/junyanz/CycleGAN) |
+[img2img-turbo](https://github.com/GaParmar/img2img-turbo)<br>
+[contrastive-unpaired-translation](https://github.com/taesungp/contrastive-unpaired-translation) (CUT)<br>
+[CycleGAN-Torch](https://github.com/junyanz/CycleGAN) |
 [pix2pix-Torch](https://github.com/phillipi/pix2pix) | [pix2pixHD](https://github.com/NVIDIA/pix2pixHD)|
-[BicycleGAN](https://github.com/junyanz/BicycleGAN) | [vid2vid](https://tcwang0509.github.io/vid2vid/) | [SPADE/GauGAN](https://github.com/NVlabs/SPADE)**<br>
-**[iGAN](https://github.com/junyanz/iGAN) | [GAN Dissection](https://github.com/CSAILVision/GANDissect) | [GAN Paint](http://ganpaint.io/)**
+[BicycleGAN](https://github.com/junyanz/BicycleGAN) | [vid2vid](https://tcwang0509.github.io/vid2vid/) | [SPADE/GauGAN](https://github.com/NVlabs/SPADE)<br>
+[iGAN](https://github.com/junyanz/iGAN) | [GAN Dissection](https://github.com/CSAILVision/GANDissect) | [GAN Paint](http://ganpaint.io/)
 
 ## Cat Paper Collection
 
